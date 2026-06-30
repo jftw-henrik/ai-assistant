@@ -81,3 +81,44 @@ def create_calendar_event(
         raise GoogleCalendarError("Google Calendar API did not return an event ID")
 
     return event_id
+
+
+def update_calendar_event(
+    event_id: str,
+    title: str,
+    date: str,
+    end_date: str | None = None,
+) -> str:
+    """Update an existing Google Calendar event and return its ID."""
+    settings = get_settings()
+    timezone = settings.google_calendar_timezone
+
+    start = _parse_datetime(date, timezone)
+    end = _parse_datetime(end_date, timezone) if end_date else start + timedelta(hours=1)
+
+    body = {
+        "summary": title,
+        "start": _format_event_datetime(start, timezone),
+        "end": _format_event_datetime(end, timezone),
+        "visibility": "private",
+        "reminders": {
+            "useDefault": False,
+            "overrides": DEFAULT_REMINDERS,
+        },
+    }
+
+    try:
+        event = (
+            _get_calendar_service()
+            .events()
+            .update(calendarId=settings.google_calendar_id, eventId=event_id, body=body)
+            .execute()
+        )
+    except HttpError as exc:
+        raise GoogleCalendarError(f"Google Calendar API error: {exc}") from exc
+
+    updated_id = event.get("id")
+    if not updated_id:
+        raise GoogleCalendarError("Google Calendar API did not return an event ID")
+
+    return updated_id

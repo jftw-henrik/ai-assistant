@@ -103,6 +103,33 @@ Re-run the OAuth script if you previously authorized Calendar only.
 
 `create_todo` creates tasks in your default Google Tasks list with optional notes and due date.
 
+## Trello board management
+
+Review your configured Trello board and apply safe automations.
+
+```bash
+# Read-only analysis (never modifies Trello or Calendar)
+curl https://<host>/trello/review
+
+# Apply only safe actions from the latest review
+curl -X POST https://<host>/trello/apply-safe
+
+# Or apply a specific review
+curl -X POST https://<host>/trello/apply-safe \
+  -H "Content-Type: application/json" \
+  -d '{"review_id": "<uuid-from-review>"}'
+```
+
+`GET /trello/review` analyzes open cards for urgency, stale work, duplicates, unclear titles, missing due dates, and dependencies. It returns a plain-text summary with a review ID.
+
+`POST /trello/apply-safe` may only:
+- create cards
+- update due dates
+- add labels
+- create or update Google Calendar events
+
+It will **not** delete, archive, or move cards. List moves and other risky changes stay in the review as manual-approval items.
+
 Example console output:
 
 ```
@@ -175,6 +202,7 @@ scripts/
 | `TRELLO_API_KEY` | yes* | — | Trello API key |
 | `TRELLO_TOKEN` | yes* | — | Trello user token |
 | `TRELLO_LIST_ID` | yes* | — | Default Trello list for new cards |
+| `TRELLO_BOARD_ID` | no | derived from list | Board used by `/trello/review` |
 
 \* Required for Trello (main task store). Without Trello, the agent falls back to `create_todo` (Google Tasks).
 

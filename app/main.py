@@ -8,16 +8,22 @@ from pydantic import ValidationError
 
 from app.config import Settings, get_settings
 from app.db import (
+    get_latest_trello_review,
+    get_trello_review,
     init_db,
     list_calendar_events,
     list_ideas,
     list_projects,
     list_todos,
+    save_trello_review,
 )
 from app.models.capture import CaptureRequest
 from app.models.records import CalendarEvent, Idea, Project, Todo
+from app.models.trello_review import ApplySafeRequest
 from app.services.agent import AgentError, AgentService
 from app.services.confirmations import confirmation_for_tools
+from app.services.trello_apply import TrelloApplyError, apply_safe_actions
+from app.services.trello_review_agent import TrelloReviewAgent, TrelloReviewError
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -29,12 +35,16 @@ def get_agent(settings: Settings = Depends(get_settings)) -> AgentService:
     return AgentService(settings)
 
 
-def _capture_error(message: str) -> PlainTextResponse:
+def _plain_error(message: str) -> PlainTextResponse:
     return PlainTextResponse(
         f"❌ Error: {message}",
         media_type=CAPTURE_MEDIA_TYPE,
         status_code=200,
     )
+
+
+def get_review_agent(settings: Settings = Depends(get_settings)) -> TrelloReviewAgent:
+    return TrelloReviewAgent(settings)
 
 
 @asynccontextmanager
@@ -76,7 +86,7 @@ async def capture(
             body = CaptureRequest.model_validate(payload)
         except (json.JSONDecodeError, ValidationError) as exc:
             logger.exception("capture invalid request body")
-            return _capture_error("Invalid request body")
+            return _plain_error("Invalid request body")
 
         text = body.text.strip()
         logger.info("capture parsed text: %s", text)
@@ -91,10 +101,59 @@ async def capture(
         )
     except AgentError as exc:
         logger.exception("capture agent error")
-        return _capture_error(str(exc))
+        return _plain_error(str(exc))
     except Exception as exc:
         logger.exception("capture unexpected error")
-        return _capture_error(str(exc))
+        return _plain_error(str(exc))
+
+
+@app.get("/trello/review", response_class=PlainTextResponse)
+async def trello_review(
+    review_agent: TrelloReviewAgent = Depends(get_review_agent),
+) -> PlainTextResponse:
+    try:
+        review = review_agent.review()
+        save_trello_review(review)
+        logger.info("trello review completed: %s", review.review_id)
+        return PlainTextResponse(review.summary_text, media_type=CAPTURE_MEDIA_TYPE)
+    except TrelloReviewError as exc:
+        logger.exception("trello review failed")
+        return _plain_error(str(exc))
+    except Exception as exc:
+        logger.exception("trello review unexpected error")
+        return _plain_error(str(exc))
+
+
+@app.post("/trello/apply-safe", response_class=PlainTextResponse)
+async def trello_apply_safe(request: Request) -> PlainTextResponse:
+    review_id: str | None = None
+    try:
+        raw_body = await request.body()
+        if raw_body.strip():
+            payload = json.loads(raw_body)
+            review_id = ApplySafeRequest.model_validate(payload).review_id
+    except (json.JSONDecodeError, ValidationError):
+        return _plain_error("Invalid request body")
+
+    review = get_trello_review(review_id) if review_id else get_latest_trello_review()
+    if review is None:
+        return _plain_error("No review found. Run GET /trello/review first.")
+
+    try:
+        result = apply_safe_actions(review)
+        logger.info(
+            "trello apply-safe review=%s applied=%s errors=%s",
+            review.review_id,
+            len(result.applied),
+            len(result.errors),
+        )
+        return PlainTextResponse(result.to_plain_text(), media_type=CAPTURE_MEDIA_TYPE)
+    except TrelloApplyError as exc:
+        logger.exception("trello apply-safe failed")
+        return _plain_error(str(exc))
+    except Exception as exc:
+        logger.exception("trello apply-safe unexpected error")
+        return _plain_error(str(exc))
 
 
 @app.get("/todos", response_model=list[Todo])

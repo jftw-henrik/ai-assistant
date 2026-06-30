@@ -24,6 +24,7 @@ class Settings:
     trello_api_key: str | None = None
     trello_token: str | None = None
     trello_list_id: str | None = None
+    trello_board_id: str | None = None
 
 
 @lru_cache
@@ -46,4 +47,5 @@ def get_settings() -> Settings:
         trello_api_key=os.getenv("TRELLO_API_KEY"),
         trello_token=os.getenv("TRELLO_TOKEN"),
         trello_list_id=os.getenv("TRELLO_LIST_ID"),
+        trello_board_id=os.getenv("TRELLO_BOARD_ID"),
     )

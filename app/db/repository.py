@@ -1,6 +1,7 @@
 from typing import Any
 
 from app.db.database import connect
+from app.models.trello_review import BoardReviewResult
 
 
 def _rows_to_dicts(rows: list) -> list[dict[str, Any]]:
@@ -126,3 +127,40 @@ def insert_trello_card(
         row = cursor.fetchone()
         conn.commit()
         return dict(row)
+
+
+def save_trello_review(review: BoardReviewResult) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO trello_reviews (id, summary_text, review_json)
+            VALUES (?, ?, ?)
+            """,
+            (review.review_id, review.summary_text, review.model_dump_json()),
+        )
+        conn.commit()
+
+
+def get_trello_review(review_id: str) -> BoardReviewResult | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT review_json FROM trello_reviews WHERE id = ?",
+            (review_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return BoardReviewResult.model_validate_json(row["review_json"])
+
+
+def get_latest_trello_review() -> BoardReviewResult | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT review_json FROM trello_reviews
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    if row is None:
+        return None
+    return BoardReviewResult.model_validate_json(row["review_json"])

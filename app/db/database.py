@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS trello_cards (
     trello_card_id TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS trello_reviews (
+    id TEXT PRIMARY KEY,
+    summary_text TEXT NOT NULL,
+    review_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
