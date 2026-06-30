@@ -60,6 +60,7 @@ class AgentService:
             raise AgentError("Agent did not select a tool")
 
         tool_name = message.tool_calls[0].function.name
+        logger.info("agent chosen tool: %s", tool_name)
         for tool_call in message.tool_calls:
             name = tool_call.function.name
             try:
@@ -73,6 +74,7 @@ class AgentService:
             except KeyError as exc:
                 raise AgentError(str(exc)) from exc
             except RuntimeError as exc:
+                logger.exception("Tool %s failed", name)
                 raise AgentError(str(exc)) from exc
             except TypeError as exc:
                 logger.error("Tool %s failed with arguments %s", name, arguments)

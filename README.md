@@ -58,7 +58,7 @@ More examples:
 | `Remember to call electrician.` | `✅ Added to Google Tasks.` |
 | `Idea: Cubase MCP` | `💡 Saved as an idea.` |
 
-Errors return JSON (e.g. HTTP 502). Success always returns plain text.
+Errors return plain text, e.g. `❌ Error: Agent service unavailable`. Success always returns plain text.
 
 ### Apple Shortcuts
 
@@ -196,7 +196,7 @@ For local development, set `DATABASE_PATH=data/henrik_assistant.db` in `.env` to
   - For persistence, mount a Railway volume and set `DATABASE_PATH` to the mount path (e.g. `/data/henrik_assistant.db`)
 - [ ] Deploy — Railway uses `railway.json` → `sh scripts/start.sh`
 - [ ] Copy the public Railway URL for Apple Shortcuts: `https://<app>.up.railway.app/capture`
-- [ ] Verify health: `GET https://<app>.up.railway.app/health`
+- [ ] Verify health: `GET https://<app>.up.railway.app/health` → `OK`
 - [ ] Test capture:
 
 ```bash
