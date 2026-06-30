@@ -2,12 +2,18 @@ import json
 import logging
 import re
 from datetime import date
+from typing import Any
 
 from groq import APIError as GroqAPIError
 from groq import Groq
 
 from app.config import Settings
-from app.integrations.google_calendar import GoogleCalendarError, create_calendar_event
+from app.integrations.google_calendar import (
+    GoogleCalendarError,
+    create_calendar_event,
+    is_google_calendar_available,
+    list_today_events,
+)
 from app.integrations.trello import (
     TrelloError,
     add_comment,
@@ -20,7 +26,23 @@ from app.integrations.trello import (
     update_card,
 )
 from app.db import repository as db
-from app.models.trello_capture import CaptureDecision, CaptureResult
+from app.models.brain import (
+    BrainContext,
+    BrainDecision,
+    CalendarEventItem,
+    SuggestedAction,
+    TrelloCardItem,
+    TrelloListItem,
+    UserProfile,
+)
+from app.models.trello_capture import (
+    CaptureAction,
+    CaptureDecision,
+    CaptureResult,
+    InputType,
+    MatchConfidence,
+)
+from app.services.brain import BrainError, analyze_input
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +50,36 @@ DONE_KEYWORDS = ("done", "klart", "fixed", "completed", "finished", "färdig", "
 ARCHIVE_KEYWORDS = ("archive", "archived", "ta bort", "rensa")
 DEFAULT_LIST = "To Do"
 DONE_LIST = "Done"
+HIGH_CONFIDENCE = 0.8
+
+AREA_TO_LIST: dict[str, str] = {
+    "work": "Work",
+    "music": "Work",
+    "company": "FIRMOR",
+    "finance": "FIRMOR",
+    "admin": "FIRMOR",
+    "home": "To Do",
+    "personal": "To Do",
+}
+
+INTENT_TO_INPUT_TYPE: dict[str, InputType] = {
+    "task": "new_task",
+    "idea": "idea",
+    "project": "project",
+    "meeting": "deadline",
+    "deadline": "deadline",
+    "update": "update",
+    "complete": "completed",
+    "note": "new_task",
+}
+
+ACTION_MAP: dict[SuggestedAction, CaptureAction] = {
+    "create": "create_card",
+    "update": "update_card",
+    "complete": "move_to_done",
+    "archive": "archive_card",
+    "ask_clarification": "create_card",
+}
 
 ROUTING_PROMPT = """You route voice/text capture into Trello actions.
 
@@ -91,6 +143,139 @@ create_list_if_missing:
 
 class TrelloCaptureError(Exception):
     """Raised when Trello capture routing fails."""
+
+
+def _fetch_calendar_events_safe() -> list[CalendarEventItem]:
+    if not is_google_calendar_available():
+        return []
+    try:
+        return [
+            CalendarEventItem(title=event["title"], start=event.get("start"), end=event.get("end"))
+            for event in list_today_events()
+        ]
+    except GoogleCalendarError:
+        logger.warning("calendar fetch failed for brain context")
+        return []
+
+
+def build_brain_context(
+    snapshot: dict[str, Any],
+    calendar_events: list[CalendarEventItem],
+    *,
+    user_profile: UserProfile | None = None,
+) -> BrainContext:
+    return BrainContext(
+        trello_lists=[
+            TrelloListItem(id=item["id"], name=item["name"]) for item in snapshot["lists"]
+        ],
+        trello_cards=[
+            TrelloCardItem(
+                id=card["id"],
+                name=card["name"],
+                list_id=card.get("list_id"),
+                list_name=card.get("list_name"),
+                due=card.get("due"),
+                desc=card.get("desc"),
+                labels=card.get("labels", []),
+            )
+            for card in snapshot["cards"]
+        ],
+        calendar_events_today=calendar_events,
+        user_profile=user_profile,
+    )
+
+
+def _card_name_for_id(snapshot: dict[str, Any], card_id: str | None) -> str | None:
+    if not card_id:
+        return None
+    for card in snapshot["cards"]:
+        if card["id"] == card_id:
+            return card["name"]
+    return None
+
+
+def _confidence_to_match(confidence: float) -> MatchConfidence:
+    if confidence >= HIGH_CONFIDENCE:
+        return "high"
+    if confidence >= 0.5:
+        return "low"
+    return "none"
+
+
+def brain_to_capture_decision(
+    brain: BrainDecision,
+    snapshot: dict[str, Any],
+) -> CaptureDecision:
+    match_confidence = _confidence_to_match(brain.confidence)
+    matched_card_id = brain.matched_card_id if match_confidence == "high" else None
+    matched_card_name = _card_name_for_id(snapshot, matched_card_id)
+
+    action = ACTION_MAP[brain.suggested_action]
+
+    if brain.suggested_action == "update" and not matched_card_id:
+        action = "create_card"
+        match_confidence = "none"
+
+    if brain.suggested_action in {"complete", "archive"} and not matched_card_id:
+        action = "create_card"
+        match_confidence = "none"
+
+    notes = brain.summary or None
+    if brain.project:
+        notes = f"{notes}\nProject: {brain.project}".strip() if notes else f"Project: {brain.project}"
+
+    due_date = brain.deadline_datetime if brain.has_deadline else None
+    calendar_date = None
+    if "calendar" in brain.target_systems and brain.has_deadline and brain.deadline_datetime:
+        calendar_date = brain.deadline_datetime
+    if "calendar" in brain.target_systems and brain.intent == "meeting" and brain.deadline_datetime:
+        calendar_date = brain.deadline_datetime
+
+    return CaptureDecision(
+        input_type=INTENT_TO_INPUT_TYPE.get(brain.intent, "new_task"),
+        action=action,
+        reason=brain.reasoning,
+        match_confidence=match_confidence,
+        matched_card_id=matched_card_id,
+        matched_card_name=matched_card_name,
+        list_name=AREA_TO_LIST.get(brain.area, DEFAULT_LIST),
+        create_list_if_missing=False,
+        title=brain.title,
+        notes=notes,
+        comment=brain.summary or None,
+        due_date=due_date,
+        calendar_date=calendar_date,
+        calendar_end_date=None,
+    )
+
+
+def _legacy_route_decision(
+    settings: Settings,
+    user_text: str,
+    snapshot: dict[str, Any],
+) -> CaptureDecision:
+    client = Groq(api_key=settings.groq_api_key)
+    payload = {
+        "input": user_text.strip(),
+        "board": snapshot,
+    }
+    prompt = ROUTING_PROMPT.format(today=date.today().isoformat())
+
+    completion = client.chat.completions.create(
+        model=settings.groq_model,
+        temperature=0.1,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=True)},
+        ],
+    )
+
+    raw = completion.choices[0].message.content
+    if not raw:
+        raise TrelloCaptureError("Empty routing response")
+
+    return CaptureDecision.model_validate(json.loads(raw))
 
 
 def _contains_keyword(text: str, keywords: tuple[str, ...]) -> bool:
@@ -270,40 +455,69 @@ def execute_decision(decision: CaptureDecision, snapshot: dict) -> CaptureResult
 
 def route_capture(settings: Settings, user_text: str) -> list[str]:
     snapshot = fetch_board_snapshot()
-    client = Groq(api_key=settings.groq_api_key)
+    calendar_events = _fetch_calendar_events_safe()
+    context = build_brain_context(
+        snapshot,
+        calendar_events,
+        user_profile=UserProfile(timezone=settings.google_calendar_timezone),
+    )
 
-    payload = {
-        "input": user_text.strip(),
-        "board": snapshot,
-    }
-    prompt = ROUTING_PROMPT.format(today=date.today().isoformat())
+    used_fallback = False
+    brain_decision: BrainDecision | None = None
+    fallback_reason: str | None = None
 
     try:
-        completion = client.chat.completions.create(
-            model=settings.groq_model,
-            temperature=0.1,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=True)},
-            ],
+        brain_decision = analyze_input(user_text, context)
+        logger.info(
+            "brain decision intent=%s action=%s area=%s confidence=%.2f matched_card=%s targets=%s title=%r reasoning=%s",
+            brain_decision.intent,
+            brain_decision.suggested_action,
+            brain_decision.area,
+            brain_decision.confidence,
+            brain_decision.matched_card_id,
+            brain_decision.target_systems,
+            brain_decision.title,
+            brain_decision.reasoning,
         )
-    except GroqAPIError as exc:
-        logger.exception("Trello capture Groq API request failed")
-        raise TrelloCaptureError("Capture routing unavailable") from exc
+        decision = brain_to_capture_decision(brain_decision, snapshot)
+    except BrainError as exc:
+        used_fallback = True
+        fallback_reason = str(exc)
+        logger.warning("brain routing failed, using legacy fallback: %s", exc)
+        try:
+            decision = _legacy_route_decision(settings, user_text, snapshot)
+        except GroqAPIError as groq_exc:
+            logger.exception("Trello capture Groq API request failed")
+            raise TrelloCaptureError("Capture routing unavailable") from groq_exc
+        except (json.JSONDecodeError, ValueError) as parse_exc:
+            logger.error("Invalid legacy capture routing payload")
+            raise TrelloCaptureError("Invalid routing output") from parse_exc
+    except Exception as exc:
+        used_fallback = True
+        fallback_reason = str(exc)
+        logger.warning("brain routing error, using legacy fallback: %s", exc, exc_info=True)
+        try:
+            decision = _legacy_route_decision(settings, user_text, snapshot)
+        except GroqAPIError as groq_exc:
+            logger.exception("Trello capture Groq API request failed")
+            raise TrelloCaptureError("Capture routing unavailable") from groq_exc
+        except (json.JSONDecodeError, ValueError) as parse_exc:
+            logger.error("Invalid legacy capture routing payload")
+            raise TrelloCaptureError("Invalid routing output") from parse_exc
 
-    raw = completion.choices[0].message.content
-    if not raw:
-        raise TrelloCaptureError("Empty routing response")
-
-    try:
-        decision = CaptureDecision.model_validate(json.loads(raw))
-    except (json.JSONDecodeError, ValueError) as exc:
-        logger.error("Invalid capture routing payload: %s", raw)
-        raise TrelloCaptureError("Invalid routing output") from exc
+    logger.info("capture routing fallback_used=%s fallback_reason=%s", used_fallback, fallback_reason)
 
     decision = enforce_safety(decision, user_text)
     result = execute_decision(decision, snapshot)
+
+    logger.info(
+        "capture executed action=%s input_type=%s list=%s matched_card=%s tools=%s",
+        decision.action,
+        decision.input_type,
+        decision.list_name,
+        decision.matched_card_id,
+        result.actions,
+    )
 
     for line in result.log_lines:
         logger.info("trello capture result: %s", line)
