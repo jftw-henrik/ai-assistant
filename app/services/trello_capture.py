@@ -35,6 +35,7 @@ from app.models.brain import (
     TrelloListItem,
     UserProfile,
 )
+from app.models.capture_result import CaptureBatchResult, CaptureItemResult
 from app.models.project_graph import ProjectGraph, ProjectResolution
 from app.models.trello_capture import (
     CaptureAction,
@@ -44,6 +45,7 @@ from app.models.trello_capture import (
     MatchConfidence,
 )
 from app.services.brain import BrainError, analyze_input
+from app.services.input_splitter import split_capture_input
 from app.services.project_graph import (
     ProjectGraphError,
     build_graph_from_trello,
@@ -488,38 +490,52 @@ def execute_decision(decision: CaptureDecision, snapshot: dict) -> CaptureResult
     return result
 
 
-def route_capture(settings: Settings, user_text: str) -> list[str]:
-    snapshot = fetch_board_snapshot()
-    calendar_events = _fetch_calendar_events_safe()
-
-    project_graph: ProjectGraph | None = None
-    project_resolution: ProjectResolution | None = None
-    project_graph_fallback = False
-    project_graph_fallback_reason: str | None = None
-
+def _build_project_graph(snapshot: dict[str, Any]) -> tuple[ProjectGraph | None, bool, str | None]:
     try:
-        project_graph = build_graph_from_trello(snapshot)
-        project_graph = enrich_graph_with_semantic_projects(project_graph)
-        project_resolution = resolve_project_for_input(user_text, project_graph)
-        logger.info(
-            "project graph matched_project=%r confidence=%.2f action=%s reasoning=%s",
-            project_resolution.project_name,
-            project_resolution.confidence,
-            project_resolution.suggested_action,
-            project_resolution.reasoning,
-        )
+        graph = build_graph_from_trello(snapshot)
+        graph = enrich_graph_with_semantic_projects(graph)
+        return graph, False, None
     except ProjectGraphError as exc:
-        project_graph_fallback = True
-        project_graph_fallback_reason = str(exc)
         logger.warning("project graph failed, continuing without graph context: %s", exc)
+        return None, True, str(exc)
     except Exception as exc:
-        project_graph_fallback = True
-        project_graph_fallback_reason = str(exc)
         logger.warning(
             "project graph error, continuing without graph context: %s",
             exc,
             exc_info=True,
         )
+        return None, True, str(exc)
+
+
+def _route_single_item(
+    settings: Settings,
+    user_text: str,
+    snapshot: dict[str, Any],
+    calendar_events: list[CalendarEventItem],
+    project_graph: ProjectGraph | None,
+) -> CaptureItemResult:
+    project_resolution: ProjectResolution | None = None
+
+    if project_graph:
+        try:
+            project_resolution = resolve_project_for_input(user_text, project_graph)
+            logger.info(
+                "project graph item=%r matched_project=%r confidence=%.2f action=%s reasoning=%s",
+                user_text,
+                project_resolution.project_name,
+                project_resolution.confidence,
+                project_resolution.suggested_action,
+                project_resolution.reasoning,
+            )
+        except ProjectGraphError as exc:
+            logger.warning("project resolution failed for item %r: %s", user_text, exc)
+        except Exception as exc:
+            logger.warning(
+                "project resolution error for item %r: %s",
+                user_text,
+                exc,
+                exc_info=True,
+            )
 
     context = build_brain_context(
         snapshot,
@@ -530,21 +546,21 @@ def route_capture(settings: Settings, user_text: str) -> list[str]:
     )
 
     used_fallback = False
-    brain_decision: BrainDecision | None = None
     fallback_reason: str | None = None
+    brain_decision: BrainDecision | None = None
+    intent: str | None = None
 
     try:
         brain_decision = analyze_input(user_text, context)
+        intent = brain_decision.intent
         logger.info(
-            "brain decision intent=%s action=%s area=%s confidence=%.2f matched_card=%s targets=%s title=%r reasoning=%s",
+            "brain decision item=%r intent=%s action=%s area=%s confidence=%.2f title=%r",
+            user_text,
             brain_decision.intent,
             brain_decision.suggested_action,
             brain_decision.area,
             brain_decision.confidence,
-            brain_decision.matched_card_id,
-            brain_decision.target_systems,
             brain_decision.title,
-            brain_decision.reasoning,
         )
         decision = brain_to_capture_decision(
             brain_decision,
@@ -554,32 +570,38 @@ def route_capture(settings: Settings, user_text: str) -> list[str]:
     except BrainError as exc:
         used_fallback = True
         fallback_reason = str(exc)
-        logger.warning("brain routing failed, using legacy fallback: %s", exc)
+        logger.warning("brain routing failed for item %r, using legacy fallback: %s", user_text, exc)
         try:
             decision = _legacy_route_decision(settings, user_text, snapshot)
+            intent = decision.input_type
         except GroqAPIError as groq_exc:
-            logger.exception("Trello capture Groq API request failed")
+            logger.exception("Trello capture Groq API request failed for item %r", user_text)
             raise TrelloCaptureError("Capture routing unavailable") from groq_exc
         except (json.JSONDecodeError, ValueError) as parse_exc:
-            logger.error("Invalid legacy capture routing payload")
+            logger.error("Invalid legacy capture routing payload for item %r", user_text)
             raise TrelloCaptureError("Invalid routing output") from parse_exc
     except Exception as exc:
         used_fallback = True
         fallback_reason = str(exc)
-        logger.warning("brain routing error, using legacy fallback: %s", exc, exc_info=True)
+        logger.warning(
+            "brain routing error for item %r, using legacy fallback: %s",
+            user_text,
+            exc,
+            exc_info=True,
+        )
         try:
             decision = _legacy_route_decision(settings, user_text, snapshot)
+            intent = decision.input_type
         except GroqAPIError as groq_exc:
-            logger.exception("Trello capture Groq API request failed")
+            logger.exception("Trello capture Groq API request failed for item %r", user_text)
             raise TrelloCaptureError("Capture routing unavailable") from groq_exc
         except (json.JSONDecodeError, ValueError) as parse_exc:
-            logger.error("Invalid legacy capture routing payload")
+            logger.error("Invalid legacy capture routing payload for item %r", user_text)
             raise TrelloCaptureError("Invalid routing output") from parse_exc
 
     logger.info(
-        "capture routing project_graph_fallback=%s project_graph_fallback_reason=%s brain_fallback=%s brain_fallback_reason=%s",
-        project_graph_fallback,
-        project_graph_fallback_reason,
+        "capture item routing item=%r brain_fallback=%s brain_fallback_reason=%s",
+        user_text,
         used_fallback,
         fallback_reason,
     )
@@ -587,16 +609,50 @@ def route_capture(settings: Settings, user_text: str) -> list[str]:
     decision = enforce_safety(decision, user_text)
     result = execute_decision(decision, snapshot)
 
+    title = decision.title or (brain_decision.title if brain_decision else user_text)
     logger.info(
-        "capture executed action=%s input_type=%s list=%s matched_card=%s tools=%s",
+        "capture item executed item=%r action=%s list=%s tools=%s",
+        user_text,
         decision.action,
-        decision.input_type,
         decision.list_name,
-        decision.matched_card_id,
         result.actions,
     )
 
-    for line in result.log_lines:
-        logger.info("trello capture result: %s", line)
+    return CaptureItemResult(
+        text=user_text,
+        title=title,
+        list_name=decision.list_name or DEFAULT_LIST,
+        actions=result.actions,
+        intent=intent,
+    )
 
-    return result.actions
+
+def route_capture(settings: Settings, user_text: str) -> CaptureBatchResult:
+    item_texts = split_capture_input(user_text)
+    if not item_texts:
+        raise TrelloCaptureError("Empty capture text")
+
+    snapshot = fetch_board_snapshot()
+    calendar_events = _fetch_calendar_events_safe()
+    project_graph, project_graph_fallback, project_graph_fallback_reason = _build_project_graph(snapshot)
+
+    logger.info(
+        "capture batch item_count=%d project_graph_fallback=%s project_graph_fallback_reason=%s",
+        len(item_texts),
+        project_graph_fallback,
+        project_graph_fallback_reason,
+    )
+
+    items: list[CaptureItemResult] = []
+    for item_text in item_texts:
+        items.append(
+            _route_single_item(
+                settings,
+                item_text,
+                snapshot,
+                calendar_events,
+                project_graph,
+            )
+        )
+
+    return CaptureBatchResult(items=items)

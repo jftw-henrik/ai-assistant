@@ -21,7 +21,7 @@ from app.models.capture import CaptureRequest
 from app.models.records import CalendarEvent, Idea, Project, Todo
 from app.models.trello_review import ApplySafeRequest
 from app.services.agent import AgentError, AgentService
-from app.services.confirmations import confirmation_for_tools
+from app.services.confirmations import confirmation_for_capture
 from app.services.daily_briefing import DailyBriefingService
 from app.services.trello_apply import TrelloApplyError, apply_safe_actions
 from app.services.trello_review_agent import TrelloReviewAgent, TrelloReviewError
@@ -96,11 +96,11 @@ async def capture(
         text = body.text.strip()
         logger.info("capture parsed text: %s", text)
 
-        tool_names = agent.run(text)
-        logger.info("capture chosen tools: %s", tool_names)
+        batch = agent.run(text)
+        logger.info("capture chosen tools: %s", batch.all_actions)
 
         return PlainTextResponse(
-            confirmation_for_tools(tool_names),
+            confirmation_for_capture(batch),
             media_type=CAPTURE_MEDIA_TYPE,
             status_code=200,
         )

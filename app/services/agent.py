@@ -7,6 +7,8 @@ from groq import Groq
 
 from app.config import Settings
 from app.integrations.trello import is_trello_available
+from app.models.capture_result import CaptureBatchResult, CaptureItemResult
+from app.services.input_splitter import split_capture_input
 from app.services.trello_capture import TrelloCaptureError, route_capture
 from app.tools.registry import execute_tool, get_tools
 
@@ -37,14 +39,29 @@ class AgentService:
         self._model = settings.groq_model
         self._tools = get_tools()
 
-    def run(self, text: str) -> list[str]:
+    def run(self, text: str) -> CaptureBatchResult:
         if is_trello_available():
             try:
                 return route_capture(self._settings, text)
             except TrelloCaptureError as exc:
                 raise AgentError(str(exc)) from exc
 
-        return self._run_legacy_tools(text)
+        return self._run_legacy_batch(text)
+
+    def _run_legacy_batch(self, text: str) -> CaptureBatchResult:
+        items = split_capture_input(text)
+        results: list[CaptureItemResult] = []
+        for item_text in items:
+            actions = self._run_legacy_tools(item_text)
+            results.append(
+                CaptureItemResult(
+                    text=item_text,
+                    title=item_text,
+                    list_name="Google Tasks",
+                    actions=actions,
+                )
+            )
+        return CaptureBatchResult(items=results)
 
     def _run_legacy_tools(self, text: str) -> list[str]:
         prompt = LEGACY_PROMPT.format(today=date.today().isoformat())

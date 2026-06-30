@@ -1,3 +1,5 @@
+from app.models.capture_result import CaptureBatchResult, CaptureItemResult
+
 CONFIRMATIONS: dict[str, str] = {
     "create_calendar_event": "✅ Added to Google Calendar.",
     "create_trello_card": "✅ Added to Trello.",
@@ -24,7 +26,15 @@ def confirmation_for_tools(tool_names: list[str]) -> str:
 
     if "create_calendar_event" in unique and "create_trello_card" in unique:
         combined = "✅ Added to Google Calendar and Trello."
-        rest = [m for m in messages if m not in {CONFIRMATIONS["create_calendar_event"], CONFIRMATIONS["create_trello_card"]}]
+        rest = [
+            m
+            for m in messages
+            if m
+            not in {
+                CONFIRMATIONS["create_calendar_event"],
+                CONFIRMATIONS["create_trello_card"],
+            }
+        ]
         if rest:
             return combined + " " + " ".join(rest)
         return combined
@@ -35,3 +45,39 @@ def confirmation_for_tools(tool_names: list[str]) -> str:
         return " ".join(messages)
 
     return "✅ Done."
+
+
+def _format_item_destination(item: CaptureItemResult) -> str:
+    destination = item.list_name or "To Do"
+    if item.intent == "idea":
+        destination = f"{destination}/Ideas"
+    return destination
+
+
+def _format_item_extras(item: CaptureItemResult) -> str:
+    extras: list[str] = []
+    if "create_calendar_event" in item.actions:
+        extras.append("Calendar")
+    if "update_trello_card" in item.actions:
+        extras.append("Updated")
+    if "move_trello_done" in item.actions:
+        extras.append("Done")
+    if "archive_trello_card" in item.actions:
+        extras.append("Archived")
+    if not extras:
+        return ""
+    return " + " + " + ".join(extras)
+
+
+def format_capture_item_line(item: CaptureItemResult) -> str:
+    return f"{_format_item_destination(item)} → {item.title}{_format_item_extras(item)}"
+
+
+def confirmation_for_capture(batch: CaptureBatchResult) -> str:
+    if len(batch.items) <= 1:
+        return confirmation_for_tools(batch.all_actions)
+
+    lines = [f"✅ Captured {len(batch.items)} items:"]
+    for index, item in enumerate(batch.items, start=1):
+        lines.append(f"{index}. {format_capture_item_line(item)}")
+    return "\n".join(lines)
