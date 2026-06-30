@@ -3,6 +3,7 @@ from typing import Any
 from app.db import repository as db
 from app.integrations.google_calendar import GoogleCalendarError, create_calendar_event
 from app.integrations.google_tasks import GoogleTasksError, create_task
+from app.integrations.trello import TrelloError, create_card
 from app.tools.base import Tool
 
 
@@ -57,6 +58,60 @@ class CreateCalendarEventTool(Tool):
         db.insert_calendar_event(title=title, date=date)
 
 
+class CreateTrelloCardTool(Tool):
+    @property
+    def name(self) -> str:
+        return "create_trello_card"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Create a Trello card in the default list. Main store for tasks, ideas, "
+            "and projects. Also use alongside create_calendar_event when a date is present."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Card title"},
+                "notes": {
+                    "type": "string",
+                    "description": "Optional description or context",
+                },
+                "due_date": {
+                    "type": "string",
+                    "description": "Optional due date as ISO 8601 date or datetime",
+                },
+            },
+            "required": ["title"],
+        }
+
+    def execute(self, **kwargs: Any) -> None:
+        title = kwargs["title"]
+        notes = kwargs.get("notes")
+        due_date = kwargs.get("due_date")
+
+        try:
+            card_id = create_card(title=title, notes=notes, due_date=due_date)
+        except TrelloError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        parts = [f"title={title!r}", f"card_id={card_id!r}"]
+        if notes:
+            parts.append(f"notes={notes!r}")
+        if due_date:
+            parts.append(f"due_date={due_date!r}")
+        print(f"create_trello_card({', '.join(parts)})")
+        db.insert_trello_card(
+            title=title,
+            notes=notes,
+            due_date=due_date,
+            trello_card_id=card_id,
+        )
+
+
 class CreateTodoTool(Tool):
     @property
     def name(self) -> str:
@@ -65,8 +120,9 @@ class CreateTodoTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Create a to-do in Google Tasks for actionable tasks, reminders, "
-            "or things the user needs to do. Use for tasks without a specific time."
+            "Legacy: create a Google Tasks item. Prefer create_trello_card when Trello "
+            "is available. Only use for explicit Google Tasks requests or when Trello "
+            "is unavailable."
         )
 
     @property

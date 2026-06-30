@@ -21,6 +21,9 @@ class Settings:
     google_client_secrets_file: Path | None = None
     google_calendar_id: str = "primary"
     google_calendar_timezone: str = "Europe/Stockholm"
+    trello_api_key: str | None = None
+    trello_token: str | None = None
+    trello_list_id: str | None = None
 
 
 @lru_cache
@@ -40,4 +43,7 @@ def get_settings() -> Settings:
         google_client_secrets_file=Path(secrets_file) if secrets_file else None,
         google_calendar_id=os.getenv("GOOGLE_CALENDAR_ID", "primary"),
         google_calendar_timezone=os.getenv("GOOGLE_CALENDAR_TIMEZONE", "Europe/Stockholm"),
+        trello_api_key=os.getenv("TRELLO_API_KEY"),
+        trello_token=os.getenv("TRELLO_TOKEN"),
+        trello_list_id=os.getenv("TRELLO_LIST_ID"),
     )

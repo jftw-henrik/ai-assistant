@@ -17,7 +17,7 @@ from app.db import (
 from app.models.capture import CaptureRequest
 from app.models.records import CalendarEvent, Idea, Project, Todo
 from app.services.agent import AgentError, AgentService
-from app.services.confirmations import confirmation_for_tool
+from app.services.confirmations import confirmation_for_tools
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -81,11 +81,11 @@ async def capture(
         text = body.text.strip()
         logger.info("capture parsed text: %s", text)
 
-        tool_name = agent.run(text)
-        logger.info("capture chosen tool: %s", tool_name)
+        tool_names = agent.run(text)
+        logger.info("capture chosen tools: %s", tool_names)
 
         return PlainTextResponse(
-            confirmation_for_tool(tool_name),
+            confirmation_for_tools(tool_names),
             media_type=CAPTURE_MEDIA_TYPE,
             status_code=200,
         )

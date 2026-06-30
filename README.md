@@ -114,9 +114,8 @@ create_todo(title='Call electrician', task_id='abc123')
 | Tool                    | When used                          |
 |-------------------------|------------------------------------|
 | `create_calendar_event` | Meetings, appointments, interviews (Google Calendar) |
-| `create_todo`           | Tasks and reminders (Google Tasks) |
-| `save_idea`             | Ideas and notes                    |
-| `create_project`        | Multi-step initiatives             |
+| `create_trello_card` | Tasks, ideas, projects (Trello — main store) |
+| `create_todo` | Legacy Google Tasks (fallback when Trello unavailable) |
 
 Tools save records to a local SQLite database and print to the console.
 
@@ -147,7 +146,8 @@ app/
   integrations/
     google_auth.py         # Shared Google OAuth credentials
     google_calendar.py     # Google Calendar API client
-    google_tasks.py        # Google Tasks API client
+    google_tasks.py        # Google Tasks API client (legacy)
+    trello.py              # Trello API client
   tools/
     base.py                  # Tool interface
     implementations.py       # Tool implementations (print + save)
@@ -172,8 +172,11 @@ scripts/
 | `GOOGLE_REFRESH_TOKEN` | yes* | — | Google OAuth refresh token |
 | `GOOGLE_CALENDAR_ID` | no | `primary` | Target Google Calendar |
 | `GOOGLE_CALENDAR_TIMEZONE` | no | `Europe/Stockholm` | Timezone for calendar events |
+| `TRELLO_API_KEY` | yes* | — | Trello API key |
+| `TRELLO_TOKEN` | yes* | — | Trello user token |
+| `TRELLO_LIST_ID` | yes* | — | Default Trello list for new cards |
 
-\* Required for `create_calendar_event` and `create_todo`. Ideas and projects work without Google credentials.
+\* Required for Trello (main task store). Without Trello, the agent falls back to `create_todo` (Google Tasks).
 
 For local development, set `DATABASE_PATH=data/henrik_assistant.db` in `.env` to persist data in the project directory.
 
@@ -188,6 +191,7 @@ For local development, set `DATABASE_PATH=data/henrik_assistant.db` in `.env` to
   - [ ] `GOOGLE_CLIENT_ID`
   - [ ] `GOOGLE_CLIENT_SECRET`
   - [ ] `GOOGLE_REFRESH_TOKEN`
+  - [ ] `TRELLO_API_KEY`, `TRELLO_TOKEN`, `TRELLO_LIST_ID`
   - [ ] `GOOGLE_CALENDAR_TIMEZONE` (optional)
   - [ ] `GROQ_MODEL` (optional)
 - [ ] Do **not** set `PORT` — Railway injects it automatically

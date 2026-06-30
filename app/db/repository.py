@@ -106,3 +106,23 @@ def list_calendar_events() -> list[dict[str, Any]]:
             "SELECT id, title, date, created_at FROM calendar_events ORDER BY id DESC"
         ).fetchall()
     return _rows_to_dicts(rows)
+
+
+def insert_trello_card(
+    title: str,
+    notes: str | None = None,
+    due_date: str | None = None,
+    trello_card_id: str | None = None,
+) -> dict[str, Any]:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO trello_cards (title, notes, due_date, trello_card_id)
+            VALUES (?, ?, ?, ?)
+            RETURNING id, title, notes, due_date, trello_card_id, created_at
+            """,
+            (title, notes, due_date, trello_card_id),
+        )
+        row = cursor.fetchone()
+        conn.commit()
+        return dict(row)

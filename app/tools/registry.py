@@ -1,20 +1,22 @@
+from app.integrations.trello import is_trello_available
 from app.tools.base import Tool
 from app.tools.implementations import (
     CreateCalendarEventTool,
-    CreateProjectTool,
     CreateTodoTool,
-    SaveIdeaTool,
+    CreateTrelloCardTool,
 )
 
+_calendar_tool = CreateCalendarEventTool()
+_todo_tool = CreateTodoTool()
+
 _TOOLS: dict[str, Tool] = {
-    tool.name: tool
-    for tool in (
-        CreateCalendarEventTool(),
-        CreateTodoTool(),
-        SaveIdeaTool(),
-        CreateProjectTool(),
-    )
+    _calendar_tool.name: _calendar_tool,
+    _todo_tool.name: _todo_tool,
 }
+
+if is_trello_available():
+    _trello_tool = CreateTrelloCardTool()
+    _TOOLS[_trello_tool.name] = _trello_tool
 
 
 def get_tools() -> list[Tool]:
