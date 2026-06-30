@@ -181,3 +181,68 @@ def resolve_list_id(board_snapshot: dict[str, Any], list_name: str) -> str:
         if item["name"].lower() == list_name.lower():
             return item["id"]
     raise TrelloError(f"List not found on board: {list_name}")
+
+
+def find_list_id(board_snapshot: dict[str, Any], list_name: str) -> str | None:
+    try:
+        return resolve_list_id(board_snapshot, list_name)
+    except TrelloError:
+        return None
+
+
+def create_list(board_id: str, name: str) -> str:
+    payload = _api_request(
+        "POST",
+        "/lists",
+        params={"name": name, "idBoard": board_id, "pos": "bottom"},
+    )
+    list_id = payload.get("id")
+    if not list_id:
+        raise TrelloError("Trello API did not return a list ID")
+    return list_id
+
+
+def move_card(card_id: str, list_id: str) -> None:
+    _api_request("PUT", f"/cards/{card_id}", params={"idList": list_id})
+
+
+def add_comment(card_id: str, text: str) -> None:
+    _api_request("POST", f"/cards/{card_id}/actions/comments", params={"text": text})
+
+
+def update_card(
+    card_id: str,
+    *,
+    name: str | None = None,
+    desc: str | None = None,
+    due_date: str | None = None,
+) -> None:
+    params: dict[str, str] = {}
+    if name is not None:
+        params["name"] = name
+    if desc is not None:
+        params["desc"] = desc
+    if due_date is not None:
+        params["due"] = _format_due_date(due_date)
+    if params:
+        _api_request("PUT", f"/cards/{card_id}", params=params)
+
+
+def archive_card(card_id: str) -> None:
+    _api_request("PUT", f"/cards/{card_id}", params={"closed": "true"})
+
+
+def resolve_list_id_or_create(
+    board_snapshot: dict[str, Any],
+    list_name: str,
+    *,
+    allow_create: bool = False,
+) -> str:
+    existing = find_list_id(board_snapshot, list_name)
+    if existing:
+        return existing
+    if allow_create:
+        list_id = create_list(board_snapshot["board_id"], list_name)
+        board_snapshot["lists"].append({"id": list_id, "name": list_name})
+        return list_id
+    raise TrelloError(f"List not found on board: {list_name}")

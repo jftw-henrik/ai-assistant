@@ -51,12 +51,47 @@ Response:
 ✅ Added to Google Calendar.
 ```
 
-More examples:
+More examples (without Trello):
 
 | Input | Response |
 |-------|----------|
 | `Remember to call electrician.` | `✅ Added to Google Tasks.` |
 | `Idea: Cubase MCP` | `💡 Saved as an idea.` |
+
+### Trello capture routing
+
+When Trello is configured, `/capture` fetches your board lists and open cards **before** deciding what to do. The agent classifies input as a new task, idea, project, update, completion, or deadline item.
+
+**List routing**
+
+| List | Used for |
+|------|----------|
+| Work | Client, music, professional work |
+| FIRMOR | Company, admin, accounting, business |
+| To Do | Personal/general tasks; fallback when uncertain |
+| In Progress | Clearly active ongoing work |
+| Done | Completed tasks |
+
+**Behavior**
+
+- Matches existing cards when the reference is clear; otherwise creates a new card in **To Do**
+- `done` / `klart` / `fixed` / `completed` → moves matching card to **Done**
+- `archive` / `ta bort` / `rensa` → archives only when clearly requested
+- Dates/deadlines → sets Trello due date and creates a Google Calendar event
+- Never archives or deletes unless intent is explicit
+
+**Confirmations**
+
+| Action | Response |
+|--------|----------|
+| New card | `✅ Added to Trello.` |
+| Card + calendar | `✅ Added to Google Calendar and Trello.` |
+| Update | `✅ Updated Trello card.` |
+| Comment | `✅ Comment added on Trello card.` |
+| Done | `✅ Moved to Done on Trello.` |
+| Archive | `✅ Archived Trello card.` |
+
+Server logs include action, list, matched card, and reason.
 
 Errors return plain text, e.g. `❌ Error: Agent service unavailable`. Success always returns plain text.
 
@@ -148,8 +183,12 @@ create_todo(title='Call electrician', task_id='abc123')
 
 | Tool                    | When used                          |
 |-------------------------|------------------------------------|
-| `create_calendar_event` | Meetings, appointments, interviews (Google Calendar) |
-| `create_trello_card` | Tasks, ideas, projects (Trello — main store) |
+| `create_calendar_event` | Meetings, appointments, deadlines (Google Calendar) |
+| `create_trello_card` | New tasks, ideas, projects (Trello) |
+| `update_trello_card` | Update existing Trello card |
+| `comment_trello_card` | Add comment to existing card |
+| `move_trello_done` | Move completed card to Done |
+| `archive_trello_card` | Archive completed card (explicit request only) |
 | `create_todo` | Legacy Google Tasks (fallback when Trello unavailable) |
 
 Tools save records to a local SQLite database and print to the console.
@@ -173,7 +212,8 @@ app/
   config.py                  # Environment settings
   models/capture.py          # Request schema
   models/records.py          # Response schemas for GET endpoints
-  services/agent.py          # Groq agent with tool calling
+  services/agent.py          # Capture entry (Trello router or legacy tools)
+  services/trello_capture.py # Trello-aware capture routing
   services/confirmations.py  # Plain-text Shortcut confirmations
   db/
     database.py              # SQLite connection and schema
