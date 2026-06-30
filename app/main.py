@@ -22,6 +22,7 @@ from app.models.records import CalendarEvent, Idea, Project, Todo
 from app.models.trello_review import ApplySafeRequest
 from app.services.agent import AgentError, AgentService
 from app.services.confirmations import confirmation_for_tools
+from app.services.daily_briefing import DailyBriefingService
 from app.services.trello_apply import TrelloApplyError, apply_safe_actions
 from app.services.trello_review_agent import TrelloReviewAgent, TrelloReviewError
 
@@ -47,6 +48,10 @@ def get_review_agent(settings: Settings = Depends(get_settings)) -> TrelloReview
     return TrelloReviewAgent(settings)
 
 
+def get_briefing_service(settings: Settings = Depends(get_settings)) -> DailyBriefingService:
+    return DailyBriefingService(settings)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     get_settings()  # fail fast if GROQ_API_KEY is missing
@@ -59,7 +64,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Henrik Assistant",
     description="AI agent that decides which tool to use for captured text.",
-    version="0.4.1",
+    version="0.5.0",
     lifespan=lifespan,
 )
 
@@ -153,6 +158,19 @@ async def trello_apply_safe(request: Request) -> PlainTextResponse:
         return _plain_error(str(exc))
     except Exception as exc:
         logger.exception("trello apply-safe unexpected error")
+        return _plain_error(str(exc))
+
+
+@app.get("/briefing/today", response_class=PlainTextResponse)
+async def briefing_today(
+    briefing: DailyBriefingService = Depends(get_briefing_service),
+) -> PlainTextResponse:
+    try:
+        text = briefing.today()
+        logger.info("daily briefing generated (%s chars)", len(text))
+        return PlainTextResponse(text, media_type=CAPTURE_MEDIA_TYPE)
+    except Exception as exc:
+        logger.exception("daily briefing unexpected error")
         return _plain_error(str(exc))
 
 

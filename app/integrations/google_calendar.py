@@ -1,5 +1,7 @@
+import os
 from datetime import datetime, timedelta
 from functools import lru_cache
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from googleapiclient.discovery import Resource
@@ -17,6 +19,13 @@ DEFAULT_REMINDERS = [
 
 class GoogleCalendarError(Exception):
     """Raised when Google Calendar API operations fail."""
+
+
+def is_google_calendar_available() -> bool:
+    return all(
+        os.getenv(name)
+        for name in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN")
+    )
 
 
 @lru_cache
@@ -122,3 +131,45 @@ def update_calendar_event(
         raise GoogleCalendarError("Google Calendar API did not return an event ID")
 
     return updated_id
+
+
+def _compact_event(event: dict[str, Any], timezone: str) -> dict[str, Any]:
+    start = event.get("start", {})
+    end = event.get("end", {})
+    start_value = start.get("dateTime") or start.get("date")
+    end_value = end.get("dateTime") or end.get("date")
+    return {
+        "title": event.get("summary", "(No title)"),
+        "start": start_value,
+        "end": end_value,
+        "all_day": "date" in start and "dateTime" not in start,
+        "timezone": timezone,
+    }
+
+
+def list_today_events() -> list[dict[str, Any]]:
+    """List today's events from the configured Google Calendar (read-only)."""
+    settings = get_settings()
+    timezone = settings.google_calendar_timezone
+    tz = ZoneInfo(timezone)
+    now = datetime.now(tz)
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_of_day = start_of_day + timedelta(days=1)
+
+    try:
+        result = (
+            _get_calendar_service()
+            .events()
+            .list(
+                calendarId=settings.google_calendar_id,
+                timeMin=start_of_day.isoformat(),
+                timeMax=end_of_day.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+            )
+            .execute()
+        )
+    except HttpError as exc:
+        raise GoogleCalendarError(f"Google Calendar API error: {exc}") from exc
+
+    return [_compact_event(item, timezone) for item in result.get("items", [])]

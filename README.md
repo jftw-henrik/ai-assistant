@@ -130,6 +130,14 @@ curl -X POST https://<host>/trello/apply-safe \
 
 It will **not** delete, archive, or move cards. List moves and other risky changes stay in the review as manual-approval items.
 
+## Daily Briefing
+
+```bash
+curl https://<host>/briefing/today
+```
+
+Read-only plain-text summary of today's calendar, overdue Trello cards, due-today cards, top 3 recommended tasks, blocked/stale items, and a short suggested plan. Uses Groq to prioritize. If Calendar or Trello is unavailable, partial results are still returned.
+
 Example console output:
 
 ```
