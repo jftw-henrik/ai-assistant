@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -68,6 +68,8 @@ class BrainContext(BaseModel):
     trello_cards: list[TrelloCardItem] = Field(default_factory=list)
     calendar_events_today: list[CalendarEventItem] = Field(default_factory=list)
     user_profile: UserProfile | None = None
+    project_graph_summary: dict[str, Any] | None = None
+    project_resolution: dict[str, Any] | None = None
 
 
 class BrainDecision(BaseModel):

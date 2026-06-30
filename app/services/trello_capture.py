@@ -35,6 +35,7 @@ from app.models.brain import (
     TrelloListItem,
     UserProfile,
 )
+from app.models.project_graph import ProjectGraph, ProjectResolution
 from app.models.trello_capture import (
     CaptureAction,
     CaptureDecision,
@@ -43,6 +44,12 @@ from app.models.trello_capture import (
     MatchConfidence,
 )
 from app.services.brain import BrainError, analyze_input
+from app.services.project_graph import (
+    ProjectGraphError,
+    build_graph_from_trello,
+    enrich_graph_with_semantic_projects,
+    resolve_project_for_input,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +170,8 @@ def build_brain_context(
     calendar_events: list[CalendarEventItem],
     *,
     user_profile: UserProfile | None = None,
+    project_graph: ProjectGraph | None = None,
+    project_resolution: ProjectResolution | None = None,
 ) -> BrainContext:
     return BrainContext(
         trello_lists=[
@@ -182,6 +191,8 @@ def build_brain_context(
         ],
         calendar_events_today=calendar_events,
         user_profile=user_profile,
+        project_graph_summary=project_graph.to_summary() if project_graph else None,
+        project_resolution=project_resolution.model_dump(mode="json") if project_resolution else None,
     )
 
 
@@ -205,12 +216,27 @@ def _confidence_to_match(confidence: float) -> MatchConfidence:
 def brain_to_capture_decision(
     brain: BrainDecision,
     snapshot: dict[str, Any],
+    *,
+    project_resolution: ProjectResolution | None = None,
 ) -> CaptureDecision:
     match_confidence = _confidence_to_match(brain.confidence)
     matched_card_id = brain.matched_card_id if match_confidence == "high" else None
     matched_card_name = _card_name_for_id(snapshot, matched_card_id)
 
+    if project_resolution:
+        if (
+            project_resolution.suggested_action == "update_existing"
+            and project_resolution.matched_card_id
+            and project_resolution.confidence >= HIGH_CONFIDENCE
+        ):
+            matched_card_id = project_resolution.matched_card_id
+            matched_card_name = _card_name_for_id(snapshot, matched_card_id)
+            match_confidence = "high"
+
     action = ACTION_MAP[brain.suggested_action]
+
+    if project_resolution and project_resolution.suggested_action == "update_existing" and matched_card_id:
+        action = "update_card"
 
     if brain.suggested_action == "update" and not matched_card_id:
         action = "create_card"
@@ -220,9 +246,18 @@ def brain_to_capture_decision(
         action = "create_card"
         match_confidence = "none"
 
+    project_name = brain.project
+    list_name = AREA_TO_LIST.get(brain.area, DEFAULT_LIST)
+
+    if project_resolution:
+        if project_resolution.project_name:
+            project_name = project_resolution.project_name
+        if project_resolution.target_list:
+            list_name = project_resolution.target_list
+
     notes = brain.summary or None
-    if brain.project:
-        notes = f"{notes}\nProject: {brain.project}".strip() if notes else f"Project: {brain.project}"
+    if project_name:
+        notes = f"{notes}\nProject: {project_name}".strip() if notes else f"Project: {project_name}"
 
     due_date = brain.deadline_datetime if brain.has_deadline else None
     calendar_date = None
@@ -238,7 +273,7 @@ def brain_to_capture_decision(
         match_confidence=match_confidence,
         matched_card_id=matched_card_id,
         matched_card_name=matched_card_name,
-        list_name=AREA_TO_LIST.get(brain.area, DEFAULT_LIST),
+        list_name=list_name,
         create_list_if_missing=False,
         title=brain.title,
         notes=notes,
@@ -456,10 +491,42 @@ def execute_decision(decision: CaptureDecision, snapshot: dict) -> CaptureResult
 def route_capture(settings: Settings, user_text: str) -> list[str]:
     snapshot = fetch_board_snapshot()
     calendar_events = _fetch_calendar_events_safe()
+
+    project_graph: ProjectGraph | None = None
+    project_resolution: ProjectResolution | None = None
+    project_graph_fallback = False
+    project_graph_fallback_reason: str | None = None
+
+    try:
+        project_graph = build_graph_from_trello(snapshot)
+        project_graph = enrich_graph_with_semantic_projects(project_graph)
+        project_resolution = resolve_project_for_input(user_text, project_graph)
+        logger.info(
+            "project graph matched_project=%r confidence=%.2f action=%s reasoning=%s",
+            project_resolution.project_name,
+            project_resolution.confidence,
+            project_resolution.suggested_action,
+            project_resolution.reasoning,
+        )
+    except ProjectGraphError as exc:
+        project_graph_fallback = True
+        project_graph_fallback_reason = str(exc)
+        logger.warning("project graph failed, continuing without graph context: %s", exc)
+    except Exception as exc:
+        project_graph_fallback = True
+        project_graph_fallback_reason = str(exc)
+        logger.warning(
+            "project graph error, continuing without graph context: %s",
+            exc,
+            exc_info=True,
+        )
+
     context = build_brain_context(
         snapshot,
         calendar_events,
         user_profile=UserProfile(timezone=settings.google_calendar_timezone),
+        project_graph=project_graph,
+        project_resolution=project_resolution,
     )
 
     used_fallback = False
@@ -479,7 +546,11 @@ def route_capture(settings: Settings, user_text: str) -> list[str]:
             brain_decision.title,
             brain_decision.reasoning,
         )
-        decision = brain_to_capture_decision(brain_decision, snapshot)
+        decision = brain_to_capture_decision(
+            brain_decision,
+            snapshot,
+            project_resolution=project_resolution,
+        )
     except BrainError as exc:
         used_fallback = True
         fallback_reason = str(exc)
@@ -505,7 +576,13 @@ def route_capture(settings: Settings, user_text: str) -> list[str]:
             logger.error("Invalid legacy capture routing payload")
             raise TrelloCaptureError("Invalid routing output") from parse_exc
 
-    logger.info("capture routing fallback_used=%s fallback_reason=%s", used_fallback, fallback_reason)
+    logger.info(
+        "capture routing project_graph_fallback=%s project_graph_fallback_reason=%s brain_fallback=%s brain_fallback_reason=%s",
+        project_graph_fallback,
+        project_graph_fallback_reason,
+        used_fallback,
+        fallback_reason,
+    )
 
     decision = enforce_safety(decision, user_text)
     result = execute_decision(decision, snapshot)
