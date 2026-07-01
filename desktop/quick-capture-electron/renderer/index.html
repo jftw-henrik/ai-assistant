@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src https://ai-assistant-production-45e5.up.railway.app; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <title>Quick Capture</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="panel" id="panel">
+      <header class="header">
+        <div class="title">
+          <span class="bolt">⚡</span>
+          <span>Quick Capture</span>
+        </div>
+        <span class="hint">⌃⌥Space</span>
+      </header>
+
+      <textarea
+        id="input"
+        placeholder="Ring Skatteverket imorgon, fixa Cubase buggen…"
+        rows="4"
+        spellcheck="true"
+      ></textarea>
+
+      <footer class="footer">
+        <div class="status-row">
+          <span id="status-icon" class="status-icon hidden" aria-hidden="true"></span>
+          <p id="status" class="status">Capture tasks, ideas, or deadlines.</p>
+        </div>
+        <span id="submit-hint" class="submit-hint">↩ capture</span>
+      </footer>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>

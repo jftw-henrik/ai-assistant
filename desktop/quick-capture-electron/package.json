@@ -1,0 +1,13 @@
+{
+  "name": "quick-capture-electron",
+  "version": "1.0.0",
+  "description": "Henrik Assistant — menu bar quick capture",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "^33.2.1"
+  }
+}
