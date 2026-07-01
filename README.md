@@ -256,6 +256,63 @@ scripts/
 
 For local development, set `DATABASE_PATH=data/henrik_assistant.db` in `.env` to persist data in the project directory.
 
+## Scheduled sync
+
+Run all sync jobs (Calendar → Trello, Keep → Trello placeholder):
+
+```bash
+curl -X POST http://127.0.0.1:8000/sync/run-all
+```
+
+Example response:
+
+```
+Sync complete.
+
+Calendar → Trello: Synced 8 calendar events: 3 created, 4 already existed, 1 skipped.
+Keep → Trello: Not implemented yet (skipped).
+```
+
+Individual sync:
+
+```bash
+curl -X POST http://127.0.0.1:8000/sync/calendar-to-trello
+```
+
+### Railway cron (daily 07:00 Europe/Stockholm)
+
+Schedule `POST /sync/run-all` every morning at **07:00 Europe/Stockholm**.
+
+**Option A — Railway Cron service (recommended)**
+
+1. In your Railway project, add a **Cron** service (or use **Cron Runs** on the web service).
+2. Set the schedule to run at 07:00 Stockholm time:
+   - Cron expression: `0 7 * * *`
+   - Timezone: `Europe/Stockholm`
+3. Set the command to call your deployed API:
+
+```bash
+curl -fsS -X POST "https://<app>.up.railway.app/sync/run-all"
+```
+
+4. Ensure the web service is publicly reachable (or use Railway private networking + internal URL if both services are in the same project).
+
+**Option B — External cron (e.g. cron-job.org)**
+
+Create a daily job at **07:00** with timezone **Europe/Stockholm**:
+
+- URL: `https://<app>.up.railway.app/sync/run-all`
+- Method: `POST`
+- Expected response: plain-text sync summary
+
+**Verify**
+
+```bash
+curl -X POST https://<app>.up.railway.app/sync/run-all
+```
+
+Check Railway logs after the scheduled run for lines like `run-all sync finished`.
+
 ## Railway deployment
 
 ### Checklist
@@ -284,6 +341,8 @@ curl -X POST https://<app>.up.railway.app/capture \
   -H "Content-Type: application/json" \
   -d '{"text": "Idea: test from Railway"}'
 ```
+
+- [ ] Configure daily sync cron: `POST /sync/run-all` at 07:00 Europe/Stockholm (see [Scheduled sync](#scheduled-sync))
 
 ### Startup command
 
