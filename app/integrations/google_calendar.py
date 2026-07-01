@@ -139,12 +139,45 @@ def _compact_event(event: dict[str, Any], timezone: str) -> dict[str, Any]:
     start_value = start.get("dateTime") or start.get("date")
     end_value = end.get("dateTime") or end.get("date")
     return {
+        "id": event.get("id"),
         "title": event.get("summary", "(No title)"),
         "start": start_value,
         "end": end_value,
         "all_day": "date" in start and "dateTime" not in start,
         "timezone": timezone,
+        "description": event.get("description") or "",
+        "visibility": event.get("visibility", "default"),
+        "status": event.get("status", "confirmed"),
+        "location": event.get("location") or "",
+        "html_link": event.get("htmlLink"),
     }
+
+
+def list_upcoming_events(*, days: int = 30) -> list[dict[str, Any]]:
+    """List upcoming calendar events for the next N days (read-only)."""
+    settings = get_settings()
+    timezone = settings.google_calendar_timezone
+    tz = ZoneInfo(timezone)
+    now = datetime.now(tz)
+    end = now + timedelta(days=days)
+
+    try:
+        result = (
+            _get_calendar_service()
+            .events()
+            .list(
+                calendarId=settings.google_calendar_id,
+                timeMin=now.isoformat(),
+                timeMax=end.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+            )
+            .execute()
+        )
+    except HttpError as exc:
+        raise GoogleCalendarError(f"Google Calendar API error: {exc}") from exc
+
+    return [_compact_event(item, timezone) for item in result.get("items", [])]
 
 
 def list_today_events() -> list[dict[str, Any]]:

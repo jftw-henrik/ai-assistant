@@ -22,6 +22,7 @@ from app.models.records import CalendarEvent, Idea, Project, Todo
 from app.models.trello_review import ApplySafeRequest
 from app.services.agent import AgentError, AgentService
 from app.services.confirmations import confirmation_for_capture
+from app.services.calendar_trello_sync import CalendarTrelloSyncError, sync_calendar_to_trello
 from app.services.daily_briefing import DailyBriefingService
 from app.services.trello_apply import TrelloApplyError, apply_safe_actions
 from app.services.trello_review_agent import TrelloReviewAgent, TrelloReviewError
@@ -109,6 +110,22 @@ async def capture(
         return _plain_error(str(exc))
     except Exception as exc:
         logger.exception("capture unexpected error")
+        return _plain_error(str(exc))
+
+
+@app.post("/sync/calendar-to-trello", response_class=PlainTextResponse)
+async def sync_calendar_to_trello_endpoint(
+    settings: Settings = Depends(get_settings),
+) -> PlainTextResponse:
+    try:
+        result = sync_calendar_to_trello(settings)
+        logger.info("calendar-to-trello sync: %s", result.to_plain_text())
+        return PlainTextResponse(result.to_plain_text(), media_type=CAPTURE_MEDIA_TYPE)
+    except CalendarTrelloSyncError as exc:
+        logger.exception("calendar-to-trello sync failed")
+        return _plain_error(str(exc))
+    except Exception as exc:
+        logger.exception("calendar-to-trello sync unexpected error")
         return _plain_error(str(exc))
 
 
