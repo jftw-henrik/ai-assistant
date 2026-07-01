@@ -1,9 +1,10 @@
 import json
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import ValidationError
 
 from app.config import Settings, get_settings
@@ -32,6 +33,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 logger = logging.getLogger(__name__)
 
 CAPTURE_MEDIA_TYPE = "text/plain; charset=utf-8"
+QUICK_CAPTURE_PAGE = Path(__file__).parent / "static" / "quick.html"
 
 
 def get_agent(settings: Settings = Depends(get_settings)) -> AgentService:
@@ -74,6 +76,11 @@ app = FastAPI(
 @app.get("/health", response_class=PlainTextResponse)
 async def health() -> PlainTextResponse:
     return PlainTextResponse("OK", media_type=CAPTURE_MEDIA_TYPE)
+
+
+@app.get("/quick", response_class=HTMLResponse)
+async def quick_capture_page() -> HTMLResponse:
+    return HTMLResponse(QUICK_CAPTURE_PAGE.read_text(encoding="utf-8"))
 
 
 @app.post("/capture", response_class=PlainTextResponse)
