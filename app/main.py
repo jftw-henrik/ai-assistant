@@ -3,7 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import ValidationError
 
@@ -46,6 +46,38 @@ def _plain_error(message: str) -> PlainTextResponse:
         media_type=CAPTURE_MEDIA_TYPE,
         status_code=200,
     )
+
+
+async def _parse_capture_text(request: Request) -> tuple[str | None, PlainTextResponse | None]:
+    try:
+        raw_body = await request.body()
+        raw_text = raw_body.decode("utf-8", errors="replace")
+        logger.info("capture raw body: %s", raw_text)
+        payload = json.loads(raw_body)
+        body = CaptureRequest.model_validate(payload)
+    except json.JSONDecodeError:
+        logger.exception("capture invalid request body")
+        return None, _plain_error("Invalid request body")
+    except ValidationError:
+        logger.exception("capture invalid request body")
+        return None, _plain_error("Invalid request body")
+
+    text = body.text.strip()
+    if not text:
+        return None, _plain_error("Empty capture text")
+    return text, None
+
+
+def _run_capture_background(settings: Settings, text: str) -> None:
+    logger.info("async capture started text=%s", text)
+    try:
+        agent = AgentService(settings)
+        batch = agent.run(text)
+        logger.info("async capture completed tools=%s", batch.all_actions)
+    except AgentError:
+        logger.exception("async capture agent error text=%r", text)
+    except Exception:
+        logger.exception("async capture unexpected error text=%r", text)
 
 
 def get_review_agent(settings: Settings = Depends(get_settings)) -> TrelloReviewAgent:
@@ -91,18 +123,11 @@ async def capture(
     logger.info("capture request headers: %s", dict(request.headers))
 
     try:
-        raw_body = await request.body()
-        raw_text = raw_body.decode("utf-8", errors="replace")
-        logger.info("capture raw body: %s", raw_text)
+        text, error = await _parse_capture_text(request)
+        if error is not None:
+            return error
 
-        try:
-            payload = json.loads(raw_body)
-            body = CaptureRequest.model_validate(payload)
-        except (json.JSONDecodeError, ValidationError) as exc:
-            logger.exception("capture invalid request body")
-            return _plain_error("Invalid request body")
-
-        text = body.text.strip()
+        assert text is not None
         logger.info("capture parsed text: %s", text)
 
         batch = agent.run(text)
@@ -119,6 +144,29 @@ async def capture(
     except Exception as exc:
         logger.exception("capture unexpected error")
         return _plain_error(str(exc))
+
+
+@app.post("/capture/async", response_class=PlainTextResponse)
+async def capture_async(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    settings: Settings = Depends(get_settings),
+) -> PlainTextResponse:
+    logger.info("capture async request headers: %s", dict(request.headers))
+
+    text, error = await _parse_capture_text(request)
+    if error is not None:
+        return error
+
+    assert text is not None
+    logger.info("capture async accepted text=%s", text)
+    background_tasks.add_task(_run_capture_background, settings, text)
+
+    return PlainTextResponse(
+        "Accepted",
+        media_type=CAPTURE_MEDIA_TYPE,
+        status_code=200,
+    )
 
 
 @app.post("/sync/calendar-to-trello", response_class=PlainTextResponse)
